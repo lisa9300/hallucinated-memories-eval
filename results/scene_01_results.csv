@@ -1,0 +1,2 @@
+clip_image_similarity,clip_text_alignment_ref,clip_text_alignment_gen,lpips_distance,ssim_score,reference_path,generated_path,description,additions,omissions,shared_objects,n_ref_objects,n_gen_objects
+0.8370028138160706,0.26740899682044983,0.3528713583946228,0.6568006873130798,0.11787870266261609,reference/scene_01.jpg,generated/participant_02.jpg,"generate an image of a living, with a brown couch with a flower pillow on top",candle; curtain; shelf,armchair; cabinet; floor; lamp; painting; plant; rug; side table,blanket; coffee table; couch; picture frame; pillow; vase,29,9

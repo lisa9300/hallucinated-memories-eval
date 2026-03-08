@@ -1,0 +1,17 @@
+# Image Evaluation Pipeline - Dependencies
+# Install with: pip install -r requirements.txt
+
+torch>=2.0
+torchvision>=0.15
+Pillow>=9.0
+numpy>=1.24
+scikit-image>=0.21
+
+# CLIP - semantic similarity
+git+https://github.com/openai/CLIP.git
+
+# LPIPS - learned perceptual similarity
+lpips>=0.1.4
+
+# Object detection (OWL-ViT)
+transformers>=4.30
