@@ -2,6 +2,8 @@
 
 Compares reference images to AI-generated reconstructions using perceptual and semantic similarity metrics. Built for the *Hallucinated Memories* project.
 
+The pipeline now supports a domain-specific `crime_scene` theme for forensic-style analysis. This is not full model fine-tuning; it tailors the evaluator with crime-scene object vocabularies, synonym handling, and weighted error reporting so evidence-like hallucinations matter more than background decor drift.
+
 ## Setup
 
 ### 1. Create a conda environment
@@ -50,6 +52,18 @@ conda activate hallucination
 ```bash
 python image_eval.py -r reference/scene_01.jpg -g generated/example_01.jpg
 ```
+
+### Run in crime-scene mode
+
+```bash
+python image_eval.py \
+    --theme crime_scene \
+    -r reference/scene_01.jpg \
+    -g generated/example_01.jpg \
+    -d "A witness recalls a body near a doorway, broken glass, a phone on the floor, and a knife beside a chair"
+```
+
+Use this when you want the object-diff stage to focus on forensic concepts such as weapons, blood stains, shell casings, footprints, phones, wallets, keys, and other evidence-adjacent objects.
 
 ### Include a participant's text description
 
@@ -111,6 +125,16 @@ Uses OWL-ViT to detect objects in both images and categorizes differences:
 - **Additions (AI hallucination)**: Objects in the generated image but not the reference.
 - **Omissions (forgotten)**: Objects in the reference but not the generated image.
 
+### Crime-Scene Weighted Object Metrics
+
+When `--theme crime_scene` is enabled, the pipeline also reports:
+
+- **Critical additions**: Evidence-like objects added by the generated image but not present in the reference.
+- **Critical omissions**: Important forensic objects present in the reference but missing from the generated image.
+- **Weighted precision**: How much of the generated scene's detected object mass is correct after up-weighting evidence-like objects.
+- **Weighted recall**: How much of the reference scene's detected object mass is preserved after up-weighting evidence-like objects.
+- **Evidence risk score**: A compact summary of weighted object mismatch. Lower is better.
+
 ## Tuning
 
 ### Object detection thresholds
@@ -124,6 +148,18 @@ python image_eval.py -r reference/scene_01.jpg -g generated/example_01.jpg --obj
 # Override the generated image threshold separately
 python image_eval.py -r reference/scene_01.jpg -g generated/example_01.jpg --generated-threshold 0.18
 ```
+
+### Theme presets
+
+```bash
+# Default scene reconstruction mode
+python image_eval.py -r reference/scene_01.jpg -g generated/example_01.jpg --theme general
+
+# Forensic / eyewitness reconstruction mode
+python image_eval.py -r reference/scene_01.jpg -g generated/example_01.jpg --theme crime_scene
+```
+
+You can still override the crime-scene vocabulary entirely with `--object-labels` if your cases need a narrower ontology.
 
 ### Disabling individual metrics
 
@@ -142,7 +178,11 @@ For a typical evaluation, look at the metrics together:
 | Where distortion happened | Text Alignment Drift | — |
 | What objects were hallucinated | Additions list | — |
 | What objects were forgotten | Omissions list | — |
+| Whether critical evidence survived | Weighted Recall | Critical Omissions |
+| Whether AI invented evidence | Evidence Risk Score | Critical Additions |
 | Human recall accuracy | Text↔Ref Align | — |
 | AI generation fidelity | Text↔Gen Align | — |
 
 CLIP alone won't differentiate well between participants since it operates at a coarse semantic level. The object diff and text alignment drift are more informative for our hallucination analysis.
+
+For crime-scene use, the weighted object metrics are the most useful addition: missing a `chair` and missing a `knife` should not count equally, and the `crime_scene` theme reflects that.

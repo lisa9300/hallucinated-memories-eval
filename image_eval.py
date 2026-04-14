@@ -68,6 +68,17 @@ class SimilarityScores:
     reference_path: str = ""
     generated_path: str = ""
     description: str = ""
+    theme: str = "general"
+
+
+@dataclass(frozen=True)
+class ThemeConfig:
+    """Domain-specific configuration for object detection and reporting."""
+    name: str
+    labels: list[str]
+    synonym_map: dict
+    critical_labels: set = field(default_factory=set)
+    label_weights: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +87,11 @@ class ObjectDiff:
     additions: list = field(default_factory=list)    # in generated but not reference
     omissions: list = field(default_factory=list)    # in reference but not generated
     shared: list = field(default_factory=list)       # present in both
+    critical_additions: list = field(default_factory=list)
+    critical_omissions: list = field(default_factory=list)
+    weighted_precision: float = 0.0
+    weighted_recall: float = 0.0
+    evidence_risk_score: float = 0.0
     reference_objects: list = field(default_factory=list)
     generated_objects: list = field(default_factory=list)
 
@@ -228,6 +244,91 @@ class ObjectDetector:
         "hardwood floor": "floor"
     }
 
+    CRIME_SCENE_LABELS = [
+        "person", "body", "victim", "suspect",
+        "gun", "knife", "weapon", "shell casing", "bullet hole",
+        "blood stain", "shoe print", "footprint", "fingerprint",
+        "glove", "mask", "rope", "duct tape", "evidence marker",
+        "broken glass", "bottle", "phone", "wallet", "key", "flashlight",
+        "bag", "backpack", "jacket", "chair", "table", "desk",
+        "door", "window", "curtain", "bed", "couch", "car",
+        "license plate", "streetlight", "trash can", "stairs", "floor",
+    ]
+
+    CRIME_SCENE_SYNONYM_MAP = {
+        "pistol": "gun",
+        "revolver": "gun",
+        "firearm": "gun",
+        "rifle": "gun",
+        "handgun": "gun",
+        "blade": "knife",
+        "blood": "blood stain",
+        "bloody stain": "blood stain",
+        "shoeprint": "shoe print",
+        "footprints": "footprint",
+        "latex glove": "glove",
+        "tape": "duct tape",
+        "crime scene marker": "evidence marker",
+        "cell phone": "phone",
+        "mobile phone": "phone",
+        "automobile": "car",
+        "vehicle": "car",
+    }
+
+    GENERAL_THEME = ThemeConfig(
+        name="general",
+        labels=DEFAULT_LABELS,
+        synonym_map=SYNONYM_MAP,
+        critical_labels=set(),
+        label_weights={},
+    )
+
+    CRIME_SCENE_THEME = ThemeConfig(
+        name="crime_scene",
+        labels=CRIME_SCENE_LABELS,
+        synonym_map={**SYNONYM_MAP, **CRIME_SCENE_SYNONYM_MAP},
+        critical_labels={
+            "body", "victim", "suspect", "gun", "knife", "weapon",
+            "shell casing", "bullet hole", "blood stain", "shoe print",
+            "footprint", "fingerprint", "glove", "mask", "rope",
+            "duct tape", "evidence marker", "broken glass", "phone",
+            "wallet", "key", "license plate",
+        },
+        label_weights={
+            "body": 3.0,
+            "victim": 3.0,
+            "suspect": 3.0,
+            "gun": 3.0,
+            "knife": 3.0,
+            "weapon": 3.0,
+            "shell casing": 3.0,
+            "bullet hole": 3.0,
+            "blood stain": 3.0,
+            "shoe print": 2.5,
+            "footprint": 2.5,
+            "fingerprint": 2.5,
+            "glove": 2.0,
+            "mask": 2.0,
+            "rope": 2.0,
+            "duct tape": 2.0,
+            "evidence marker": 2.0,
+            "broken glass": 2.0,
+            "phone": 1.8,
+            "wallet": 1.8,
+            "key": 1.8,
+            "license plate": 1.8,
+            "car": 1.5,
+            "bag": 1.5,
+            "backpack": 1.5,
+            "jacket": 1.3,
+        },
+    )
+
+    THEMES = {
+        GENERAL_THEME.name: GENERAL_THEME,
+        CRIME_SCENE_THEME.name: CRIME_SCENE_THEME,
+    }
+
     def __init__(
         self,
         model_name: str = "google/owlvit-base-patch32",
@@ -236,6 +337,7 @@ class ObjectDetector:
         generated_threshold: float = None,
         device: str = None,
         synonym_map: dict = None,
+        theme: str = "general",
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         device_id = 0 if self.device == "cuda" else -1
@@ -244,12 +346,13 @@ class ObjectDetector:
             model=model_name,
             device=device_id,
         )
-        self.labels = labels or self.DEFAULT_LABELS
+        self.theme_config = self.THEMES.get(theme, self.GENERAL_THEME)
+        self.labels = labels or self.theme_config.labels
         self.threshold = confidence_threshold
         # AI-generated images have softer features → lower confidence scores.
         # Use a separate (lower) threshold for generated images.
         self.generated_threshold = generated_threshold or (confidence_threshold * 0.6)
-        self.synonym_map = synonym_map or self.SYNONYM_MAP
+        self.synonym_map = synonym_map or self.theme_config.synonym_map
 
     def _normalize_label(self, label: str) -> str:
         """Map a detected label to its canonical form."""
@@ -284,11 +387,30 @@ class ObjectDetector:
 
         ref_labels = set(obj["label"] for obj in ref_objects)
         gen_labels = set(obj["label"] for obj in gen_objects)
+        additions = sorted(gen_labels - ref_labels)
+        omissions = sorted(ref_labels - gen_labels)
+        shared = sorted(ref_labels & gen_labels)
+
+        def label_weight(label: str) -> float:
+            return self.theme_config.label_weights.get(label, 1.0)
+
+        shared_weight = sum(label_weight(label) for label in shared)
+        reference_weight = sum(label_weight(label) for label in ref_labels)
+        generated_weight = sum(label_weight(label) for label in gen_labels)
+        addition_weight = sum(label_weight(label) for label in additions)
+        omission_weight = sum(label_weight(label) for label in omissions)
+        total_weight = shared_weight + addition_weight + omission_weight
+        critical_labels = self.theme_config.critical_labels
 
         return ObjectDiff(
-            additions=sorted(gen_labels - ref_labels),
-            omissions=sorted(ref_labels - gen_labels),
-            shared=sorted(ref_labels & gen_labels),
+            additions=additions,
+            omissions=omissions,
+            shared=shared,
+            critical_additions=sorted(label for label in additions if label in critical_labels),
+            critical_omissions=sorted(label for label in omissions if label in critical_labels),
+            weighted_precision=(shared_weight / generated_weight) if generated_weight else 1.0,
+            weighted_recall=(shared_weight / reference_weight) if reference_weight else 1.0,
+            evidence_risk_score=((addition_weight + omission_weight) / total_weight) if total_weight else 0.0,
             reference_objects=[obj["label"] for obj in ref_objects],
             generated_objects=[obj["label"] for obj in gen_objects],
         )
@@ -320,8 +442,10 @@ class ImageEvaluator:
         object_threshold: float = 0.25,
         generated_threshold: float = None,
         device: str = None,
+        theme: str = "general",
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.theme = theme
         print(f"[ImageEvaluator] Using device: {self.device}")
 
         self.clip_scorer = CLIPScorer(device=self.device) if use_clip else None
@@ -333,6 +457,7 @@ class ImageEvaluator:
                 confidence_threshold=object_threshold,
                 generated_threshold=generated_threshold,
                 device=self.device,
+                theme=theme,
             )
             if use_objects
             else None
@@ -349,6 +474,7 @@ class ImageEvaluator:
             reference_path=reference_path,
             generated_path=generated_path,
             description=description,
+            theme=self.theme,
         )
 
         # CLIP image-image similarity
@@ -409,6 +535,7 @@ class ImageEvaluator:
         print("\n" + "=" * 60)
         print(f"  Reference : {Path(s.reference_path).name}")
         print(f"  Generated : {Path(s.generated_path).name}")
+        print(f"  Theme     : {s.theme}")
         if s.description:
             print(f"  Description: \"{s.description[:80]}...\"" if len(s.description) > 80 else f"  Description: \"{s.description}\"")
         print("-" * 60)
@@ -431,6 +558,12 @@ class ImageEvaluator:
             print(f"  Shared (correct)       : {od.shared}")
             print(f"  Additions (AI hallu.)  : {od.additions}")
             print(f"  Omissions (forgotten)  : {od.omissions}")
+            if od.critical_additions or od.critical_omissions:
+                print(f"  Critical additions     : {od.critical_additions}")
+                print(f"  Critical omissions     : {od.critical_omissions}")
+            print(f"  Weighted precision     : {od.weighted_precision:.4f}")
+            print(f"  Weighted recall        : {od.weighted_recall:.4f}")
+            print(f"  Evidence risk score    : {od.evidence_risk_score:.4f}  (lower = safer)")
 
         print("=" * 60)
 
@@ -444,6 +577,11 @@ class ImageEvaluator:
                 row["additions"] = "; ".join(r.object_diff.additions)
                 row["omissions"] = "; ".join(r.object_diff.omissions)
                 row["shared_objects"] = "; ".join(r.object_diff.shared)
+                row["critical_additions"] = "; ".join(r.object_diff.critical_additions)
+                row["critical_omissions"] = "; ".join(r.object_diff.critical_omissions)
+                row["weighted_precision"] = r.object_diff.weighted_precision
+                row["weighted_recall"] = r.object_diff.weighted_recall
+                row["evidence_risk_score"] = r.object_diff.evidence_risk_score
                 row["n_ref_objects"] = len(r.object_diff.reference_objects)
                 row["n_gen_objects"] = len(r.object_diff.generated_objects)
             rows.append(row)
@@ -460,6 +598,11 @@ class ImageEvaluator:
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate perceptual similarity between reference and generated images."
+    )
+    parser.add_argument(
+        "--theme", default="general",
+        choices=sorted(ObjectDetector.THEMES.keys()),
+        help="Domain preset for object detection and reporting. Use 'crime_scene' for forensic-style evaluation."
     )
     parser.add_argument(
         "--reference", "-r", required=True,
@@ -527,6 +670,7 @@ def main():
         object_labels=args.object_labels,
         object_threshold=args.object_threshold,
         generated_threshold=args.generated_threshold,
+        theme=args.theme,
     )
 
     # Run evaluation

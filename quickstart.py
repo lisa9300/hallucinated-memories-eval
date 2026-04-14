@@ -15,12 +15,12 @@ from image_eval import ImageEvaluator, CLIPScorer
 
 # ── Example 1: Compare two images ────────────────────────────────────────────
 
-evaluator = ImageEvaluator()
+evaluator = ImageEvaluator(theme="crime_scene")
 
 result = evaluator.evaluate(
-    reference_path="images/original_scene.jpg",
-    generated_path="images/generated_from_participant_01.jpg",
-    description="A red barn in a green field with two horses and a fence",
+    reference_path="images/original_crime_scene.jpg",
+    generated_path="images/generated_from_witness_01.jpg",
+    description="A witness recalls a body near the doorway, broken glass on the floor, a phone, and a knife beside a chair",
 )
 evaluator.print_result(result)
 
@@ -29,16 +29,16 @@ evaluator.print_result(result)
 
 # Point to a folder of generated images — one result per image
 results = evaluator.evaluate_batch(
-    reference_path="images/original_scene.jpg",
+    reference_path="images/original_crime_scene.jpg",
     generated_paths=[
-        "images/gen_participant_01.jpg",
-        "images/gen_participant_02.jpg",
+        "images/gen_witness_01.jpg",
+        "images/gen_witness_02.jpg",
         "images/gen_aggregated_prompt.jpg",
         "images/gen_llm_synthesized.jpg",
     ],
     descriptions=[
-        "A red barn with two horses and a white fence",       # participant 1
-        "A farmhouse with one horse, surrounded by trees",    # participant 2
+        "A body near a chair, shattered glass, and a phone by the doorway",  # witness 1
+        "A suspect near a car with a weapon and a bag",  # witness 2
         "",   # aggregated prompt (no separate description)
         "",   # llm-synthesized (no separate description)
     ],
@@ -62,9 +62,9 @@ evaluator.results_to_csv(results, "evaluation_results.csv")
 
 clip_scorer = CLIPScorer()
 
-original = "images/original_scene.jpg"
-generated = "images/gen_participant_01.jpg"
-description = "A red barn with two horses and a white fence"
+original = "images/original_crime_scene.jpg"
+generated = "images/gen_witness_01.jpg"
+description = "A body near a chair, shattered glass, and a phone by the doorway"
 
 # (a) How well does the participant's description match the ORIGINAL?
 human_accuracy = clip_scorer.text_image_alignment(description, original)
