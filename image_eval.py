@@ -251,8 +251,12 @@ class ObjectDetector:
         "glove", "mask", "rope", "duct tape", "evidence marker",
         "broken glass", "bottle", "phone", "wallet", "key", "flashlight",
         "bag", "backpack", "jacket", "chair", "table", "desk",
-        "door", "window", "curtain", "bed", "couch", "car",
+        "coffee table", "side table", "cabinet", "shelf", "media console",
+        "door", "window", "curtain", "bed", "couch", "armchair", "car",
         "license plate", "streetlight", "trash can", "stairs", "floor",
+        "television", "remote control", "lamp", "clock", "painting",
+        "picture frame", "book", "cup", "glass", "pillow", "blanket",
+        "basket", "rug",
     ]
 
     CRIME_SCENE_SYNONYM_MAP = {
@@ -271,6 +275,20 @@ class ObjectDetector:
         "crime scene marker": "evidence marker",
         "cell phone": "phone",
         "mobile phone": "phone",
+        "keys": "key",
+        "suspect": "person",
+        "burglar": "person",
+        "intruder": "person",
+        "hooded person": "person",
+        "tv": "television",
+        "remote": "remote control",
+        "drinking glass": "glass",
+        "mug": "cup",
+        "art": "painting",
+        "bookshelf": "shelf",
+        "bookcase": "shelf",
+        "tv stand": "media console",
+        "entertainment center": "media console",
         "automobile": "car",
         "vehicle": "car",
     }
@@ -288,7 +306,7 @@ class ObjectDetector:
         labels=CRIME_SCENE_LABELS,
         synonym_map={**SYNONYM_MAP, **CRIME_SCENE_SYNONYM_MAP},
         critical_labels={
-            "body", "victim", "suspect", "gun", "knife", "weapon",
+            "body", "victim", "gun", "knife", "weapon",
             "shell casing", "bullet hole", "blood stain", "shoe print",
             "footprint", "fingerprint", "glove", "mask", "rope",
             "duct tape", "evidence marker", "broken glass", "phone",
@@ -297,7 +315,6 @@ class ObjectDetector:
         label_weights={
             "body": 3.0,
             "victim": 3.0,
-            "suspect": 3.0,
             "gun": 3.0,
             "knife": 3.0,
             "weapon": 3.0,
