@@ -36,7 +36,7 @@ from typing import Optional
 
 import torch
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from torchvision import transforms
 
 # ─── Metric Imports ──────────────────────────────────────────────────────────
@@ -79,6 +79,19 @@ class ThemeConfig:
     synonym_map: dict
     critical_labels: set = field(default_factory=set)
     label_weights: dict = field(default_factory=dict)
+    object_threshold: float = 0.25
+    generated_threshold: Optional[float] = None
+    attribute_prompts: dict = field(default_factory=dict)
+
+
+@dataclass
+class AttributeAlignment:
+    """CLIP-based probe for a fine-grained visual attribute."""
+    label: str = ""
+    prompt: str = ""
+    ref_alignment: float = 0.0
+    gen_alignment: float = 0.0
+    drift: float = 0.0
 
 
 @dataclass
@@ -101,13 +114,14 @@ class EvalResult:
     """Full evaluation result for one image pair."""
     scores: SimilarityScores = field(default_factory=SimilarityScores)
     object_diff: Optional[ObjectDiff] = None
+    attribute_alignments: list[AttributeAlignment] = field(default_factory=list)
 
 
 # ─── Image Loading Utilities ─────────────────────────────────────────────────
 
 def load_image_pil(path: str) -> Image.Image:
-    """Load an image as PIL RGB."""
-    return Image.open(path).convert("RGB")
+    """Load an image as PIL RGB, respecting camera EXIF orientation."""
+    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
 
 
 def load_image_tensor(path: str, size: int = 256) -> torch.Tensor:
@@ -293,6 +307,72 @@ class ObjectDetector:
         "vehicle": "car",
     }
 
+    PORTRAIT_LABELS = [
+        "person", "woman", "face", "hair", "short hair", "brown hair",
+        "green sweater", "black shirt", "shirt", "necklace", "earring",
+        "couch", "armchair", "chair", "pillow", "book", "shelf",
+        "window", "curtain", "plant", "picture frame", "painting",
+    ]
+
+    PORTRAIT_SYNONYM_MAP = {
+        "woman": "person",
+        "white woman": "person",
+        "female person": "person",
+        "shoulder length brown hair": "brown hair",
+        "short brown hair": "brown hair",
+        "curly hair": "hair",
+        "bob haircut": "short hair",
+        "green jumper": "green sweater",
+        "sweater": "green sweater",
+        "black undershirt": "black shirt",
+        "black top": "black shirt",
+        "bookshelf": "shelf",
+        "bookcase": "shelf",
+        "houseplant": "plant",
+        "potted plant": "plant",
+        "art": "painting",
+    }
+
+    URBAN_STREET_LABELS = [
+        "sign", "wooden sign", "storefront sign", "restaurant sign",
+        "psychic sign", "pizza sign", "palm reading sign", "price sign",
+        "storefront", "restaurant", "pizza restaurant", "shop",
+        "building", "brick building", "domed building", "dome", "tower",
+        "church", "street", "sidewalk", "road", "crosswalk",
+        "car", "parked car", "taxi", "person", "pedestrian",
+        "streetlight", "traffic sign", "stop sign", "awning", "door",
+        "window", "utility pole", "sign post",
+    ]
+
+    URBAN_STREET_SYNONYM_MAP = {
+        "advertising sign": "sign",
+        "business sign": "storefront sign",
+        "shop sign": "storefront sign",
+        "wooden sign": "psychic sign",
+        "pizza roma sign": "restaurant sign",
+        "psychic amy sign": "psychic sign",
+        "palm reading": "palm reading sign",
+        "price sign": "psychic sign",
+        "$20 sign": "psychic sign",
+        "twenty dollar sign": "psychic sign",
+        "pizzeria": "pizza restaurant",
+        "pizza shop": "pizza restaurant",
+        "cathedral": "church",
+        "church dome": "domed building",
+        "dome building": "domed building",
+        "high dome topped building": "domed building",
+        "side walk": "sidewalk",
+        "automobile": "car",
+        "vehicle": "car",
+        "parked vehicle": "parked car",
+        "people": "person",
+        "walking person": "pedestrian",
+        "lamp post": "streetlight",
+        "street lamp": "streetlight",
+        "traffic light": "traffic sign",
+        "signpost": "sign post",
+    }
+
     GENERAL_THEME = ThemeConfig(
         name="general",
         labels=DEFAULT_LABELS,
@@ -341,16 +421,84 @@ class ObjectDetector:
         },
     )
 
+    PORTRAIT_THEME = ThemeConfig(
+        name="portrait",
+        labels=PORTRAIT_LABELS,
+        synonym_map={**SYNONYM_MAP, **PORTRAIT_SYNONYM_MAP},
+        critical_labels={
+            "person", "brown hair", "green sweater", "black shirt",
+        },
+        label_weights={
+            "person": 3.0,
+            "face": 2.0,
+            "brown hair": 2.0,
+            "short hair": 1.7,
+            "hair": 1.5,
+            "green sweater": 2.0,
+            "black shirt": 1.7,
+            "necklace": 1.4,
+            "earring": 1.2,
+        },
+        object_threshold=0.10,
+        generated_threshold=0.10,
+        attribute_prompts={
+            "person": "a portrait photo of one person facing the camera",
+            "short_brown_hair": "a person with short shoulder length brown hair",
+            "green_sweater": "a person wearing a green sweater",
+            "black_shirt_visible": "a black shirt visible underneath a green sweater",
+            "necklace": "a person wearing a thin necklace",
+        },
+    )
+
+    URBAN_STREET_THEME = ThemeConfig(
+        name="urban_street",
+        labels=URBAN_STREET_LABELS,
+        synonym_map={**SYNONYM_MAP, **URBAN_STREET_SYNONYM_MAP},
+        critical_labels={
+            "psychic sign", "restaurant sign", "palm reading sign",
+            "price sign", "domed building",
+        },
+        label_weights={
+            "psychic sign": 3.0,
+            "restaurant sign": 3.0,
+            "palm reading sign": 2.5,
+            "price sign": 2.5,
+            "sign": 2.0,
+            "storefront sign": 2.0,
+            "pizza sign": 2.5,
+            "domed building": 2.5,
+            "dome": 2.0,
+            "building": 1.5,
+            "storefront": 1.5,
+            "restaurant": 1.5,
+            "sidewalk": 1.3,
+            "street": 1.3,
+            "car": 1.2,
+            "person": 1.2,
+        },
+        object_threshold=0.08,
+        generated_threshold=0.10,
+        attribute_prompts={
+            "psychic_amy_sign": "a sign that says Psychic Amy palm reading 20 dollars",
+            "pizza_roma_sign": "a restaurant sign that says Pizza Roma established 1985",
+            "domed_building": "a high dome topped building in the background",
+            "city_street": "an urban city street with storefronts and buildings",
+            "sidewalk_perspective": "a sidewalk next to a street with parked cars",
+        },
+    )
+
     THEMES = {
         GENERAL_THEME.name: GENERAL_THEME,
         CRIME_SCENE_THEME.name: CRIME_SCENE_THEME,
+        PORTRAIT_THEME.name: PORTRAIT_THEME,
+        URBAN_STREET_THEME.name: URBAN_STREET_THEME,
     }
 
     def __init__(
         self,
         model_name: str = "google/owlvit-base-patch32",
         labels: list = None,
-        confidence_threshold: float = 0.25,
+        confidence_threshold: float = None,
         generated_threshold: float = None,
         device: str = None,
         synonym_map: dict = None,
@@ -365,10 +513,19 @@ class ObjectDetector:
         )
         self.theme_config = self.THEMES.get(theme, self.GENERAL_THEME)
         self.labels = labels or self.theme_config.labels
-        self.threshold = confidence_threshold
+        self.threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else self.theme_config.object_threshold
+        )
         # AI-generated images have softer features → lower confidence scores.
         # Use a separate (lower) threshold for generated images.
-        self.generated_threshold = generated_threshold or (confidence_threshold * 0.6)
+        if generated_threshold is not None:
+            self.generated_threshold = generated_threshold
+        elif self.theme_config.generated_threshold is not None:
+            self.generated_threshold = self.theme_config.generated_threshold
+        else:
+            self.generated_threshold = self.threshold * 0.6
         self.synonym_map = synonym_map or self.theme_config.synonym_map
 
     def _normalize_label(self, label: str) -> str:
@@ -456,13 +613,14 @@ class ImageEvaluator:
         use_ssim: bool = True,
         use_objects: bool = True,
         object_labels: list = None,
-        object_threshold: float = 0.25,
+        object_threshold: float = None,
         generated_threshold: float = None,
         device: str = None,
         theme: str = "general",
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.theme = theme
+        self.theme_config = ObjectDetector.THEMES.get(theme, ObjectDetector.GENERAL_THEME)
         print(f"[ImageEvaluator] Using device: {self.device}")
 
         self.clip_scorer = CLIPScorer(device=self.device) if use_clip else None
@@ -525,7 +683,24 @@ class ImageEvaluator:
         if self.object_detector:
             obj_diff = self.object_detector.diff(reference_path, generated_path)
 
-        return EvalResult(scores=scores, object_diff=obj_diff)
+        attribute_alignments = []
+        if self.clip_scorer and self.theme_config.attribute_prompts:
+            for label, prompt in self.theme_config.attribute_prompts.items():
+                ref_alignment = self.clip_scorer.text_image_alignment(prompt, reference_path)
+                gen_alignment = self.clip_scorer.text_image_alignment(prompt, generated_path)
+                attribute_alignments.append(AttributeAlignment(
+                    label=label,
+                    prompt=prompt,
+                    ref_alignment=ref_alignment,
+                    gen_alignment=gen_alignment,
+                    drift=ref_alignment - gen_alignment,
+                ))
+
+        return EvalResult(
+            scores=scores,
+            object_diff=obj_diff,
+            attribute_alignments=attribute_alignments,
+        )
 
     def evaluate_batch(
         self,
@@ -567,6 +742,15 @@ class ImageEvaluator:
         print(f"  LPIPS Distance         : {s.lpips_distance:.4f}  (0.0 = identical)")
         print(f"  SSIM Score             : {s.ssim_score:.4f}  (1.0 = identical)")
 
+        if result.attribute_alignments:
+            print("-" * 60)
+            print("  Attribute Probes       :")
+            for attr in result.attribute_alignments:
+                print(
+                    f"    {attr.label:<20} ref={attr.ref_alignment:.4f}  "
+                    f"gen={attr.gen_alignment:.4f}  drift={attr.drift:+.4f}"
+                )
+
         if result.object_diff:
             od = result.object_diff
             print("-" * 60)
@@ -601,6 +785,19 @@ class ImageEvaluator:
                 row["evidence_risk_score"] = r.object_diff.evidence_risk_score
                 row["n_ref_objects"] = len(r.object_diff.reference_objects)
                 row["n_gen_objects"] = len(r.object_diff.generated_objects)
+            if r.attribute_alignments:
+                row["attribute_alignments"] = json.dumps([
+                    asdict(attr) for attr in r.attribute_alignments
+                ])
+                row["attribute_alignment_ref_mean"] = float(np.mean([
+                    attr.ref_alignment for attr in r.attribute_alignments
+                ]))
+                row["attribute_alignment_gen_mean"] = float(np.mean([
+                    attr.gen_alignment for attr in r.attribute_alignments
+                ]))
+                row["attribute_alignment_drift_mean"] = float(np.mean([
+                    attr.drift for attr in r.attribute_alignments
+                ]))
             rows.append(row)
 
         with open(output_path, "w", newline="") as f:
@@ -619,7 +816,8 @@ def main():
     parser.add_argument(
         "--theme", default="general",
         choices=sorted(ObjectDetector.THEMES.keys()),
-        help="Domain preset for object detection and reporting. Use 'crime_scene' for forensic-style evaluation."
+        help="Domain preset for object detection and reporting. "
+             "Available themes include general, crime_scene, portrait, and urban_street."
     )
     parser.add_argument(
         "--reference", "-r", required=True,
@@ -654,12 +852,15 @@ def main():
         help="Custom object labels for detection (space-separated)."
     )
     parser.add_argument(
-        "--object-threshold", type=float, default=0.25,
-        help="Confidence threshold for reference image object detection (default: 0.25)."
+        "--object-threshold", type=float, default=None,
+        help="Confidence threshold for reference image object detection. "
+             "Defaults are theme-specific: 0.25 for general/crime_scene, "
+             "0.10 for portrait, 0.08 for urban_street."
     )
     parser.add_argument(
         "--generated-threshold", type=float, default=None,
-        help="Confidence threshold for generated image detection (default: 60%% of --object-threshold). "
+        help="Confidence threshold for generated image detection (default: 60%% of --object-threshold, "
+             "or theme-specific when provided). "
              "AI-generated images have softer features and need a lower threshold."
     )
     args = parser.parse_args()
